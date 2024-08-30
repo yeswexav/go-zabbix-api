@@ -60,7 +60,12 @@ type Host struct {
 	TemplateIDsClear TemplateIDs    `json:"templates_clear,omitempty"`
 	// templates are read back from this one
 	ParentTemplateIDs TemplateIDs `json:"parentTemplates,omitempty"`
-	ProxyID           string      `json:"proxy_hostid,omitempty"`
+
+	// proxyid : there was a breaking change in version 7.0 (property proxy_hostid renamed to hostid)
+	ProxyID           string      `json:"-"`
+	RawProxyIDLegacy  string      `json:"proxy_hostid,omitempty"`
+	RawProxyIDv7      string      `json:"proxyid,omitempty"`
+
 	Tags              Tags        `json:"tags,omitempty"`
 }
 
@@ -107,12 +112,19 @@ func (api *API) HostsGet(params Params) (res Hosts, err error) {
 			res[i].InventoryMode = *h.RawInventoryMode
 		}
 
+		// fix breaking API change in version 7.0
+		if api.Config.Version >= 70000 {
+			res[i].ProxyID = string(h.RawProxyIDv7)
+		} else {
+			res[i].ProxyID = string(h.RawProxyIDLegacy)
+		}
+
 		// fix up host inventory if present
 		if len(h.RawInventory) != 0 {
 			// if its an empty array
 			asStr := string(h.RawInventory)
 			if asStr == "[]" || asStr == "{}" {
-				continue
+				continue	// this will force to the next iteration of the for loop
 			}
 
 			// lets unbox
@@ -123,7 +135,7 @@ func (api *API) HostsGet(params Params) (res Hosts, err error) {
 			}
 			res[i].Inventory = inv
 		}
-
+		// warning : any code below will not be excuted if raw inventory is empty
 	}
 
 	return
@@ -176,7 +188,7 @@ func (api *API) HostGetByHost(host string) (res *Host, err error) {
 }
 
 // handle manual marshal
-func prepHosts(hosts Hosts) {
+func (api *API) prepHosts(hosts Hosts) {
 	for i := 0; i < len(hosts); i++ {
 		h := hosts[i]
 		for j := 0; j < len(h.Interfaces); j++ {
@@ -195,13 +207,20 @@ func prepHosts(hosts Hosts) {
 		}
 		invMode := h.InventoryMode
 		h.RawInventoryMode = &invMode
+
+		// fix breaking API change in version 7.0
+		if api.Config.Version >= 70000 {
+			hosts[i].RawProxyIDv7 = h.ProxyID
+		} else {
+			hosts[i].RawProxyIDLegacy = h.ProxyID
+		}
 	}
 }
 
 // HostsCreate Wrapper for host.create
 // https://www.zabbix.com/documentation/3.2/manual/api/reference/host/create
 func (api *API) HostsCreate(hosts Hosts) (err error) {
-	prepHosts(hosts)
+	api.prepHosts(hosts)
 	response, err := api.CallWithError("host.create", hosts)
 	if err != nil {
 		return
@@ -218,7 +237,7 @@ func (api *API) HostsCreate(hosts Hosts) (err error) {
 // HostsUpdate Wrapper for host.update
 // https://www.zabbix.com/documentation/3.2/manual/api/reference/host/update
 func (api *API) HostsUpdate(hosts Hosts) (err error) {
-	prepHosts(hosts)
+	api.prepHosts(hosts)
 	_, err = api.CallWithError("host.update", hosts)
 	return
 }
